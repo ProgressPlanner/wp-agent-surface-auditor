@@ -139,4 +139,25 @@ class Report_Integration_Test extends WP_UnitTestCase {
 		$this->assertGreaterThanOrEqual( 1, $summary['findings_by_severity']['critical'] );
 		$this->assertGreaterThanOrEqual( 1, $summary['agent_reachable_write'] );
 	}
+
+	public function test_fleet_summary_is_a_faithful_projection_of_the_summary() {
+		$this->assertArrayHasKey( 'fleet_summary', self::$report );
+		$fleet   = self::$report['fleet_summary'];
+		$summary = self::$report['summary'];
+
+		// Shape: the compact digest a fleet consumer reads.
+		foreach ( [ 'sev', 'highest_severity', 'agent_reachable', 'agent_reachable_write', 'findings_by_severity', 'analysis_errors' ] as $key ) {
+			$this->assertArrayHasKey( $key, $fleet, "fleet_summary missing $key" );
+		}
+
+		// It is a pure projection — counts equal the source summary's.
+		$this->assertSame( (int) $summary['agent_reachable'], $fleet['agent_reachable'] );
+		$this->assertSame( (int) $summary['agent_reachable_write'], $fleet['agent_reachable_write'] );
+		$this->assertSame( array_map( 'intval', $summary['findings_by_severity'] ), $fleet['findings_by_severity'] );
+
+		// The fixtures produce ≥1 critical finding, so the grade must be 'crit'
+		// and the highest severity 'critical'.
+		$this->assertSame( 'critical', $fleet['highest_severity'] );
+		$this->assertSame( 'crit', $fleet['sev'] );
+	}
 }

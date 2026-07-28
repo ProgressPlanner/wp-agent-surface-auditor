@@ -140,19 +140,106 @@ class Audit_Runner {
 		}
 
 		return [
-			'generated_at' => gmdate( 'c' ),
-			'from_cache'   => false,
-			'environment'  => [
+			'generated_at'  => gmdate( 'c' ),
+			'from_cache'    => false,
+			'environment'   => [
 				'plugin_version' => ASA_VERSION,
 				'wp_version'     => is_string( $wp_version ) ? $wp_version : '',
 				'php_version'    => PHP_VERSION,
 				'mcp_adapter'    => $adapter_state,
 			],
-			'summary'      => $summary,
-			'coverage'     => $this->coverage_notes(),
-			'servers'      => $public_servers,
-			'abilities'    => $abilities,
+			'summary'       => $summary,
+			'fleet_summary' => $this->fleet_summary( $summary ),
+			'coverage'      => $this->coverage_notes(),
+			'servers'       => $public_servers,
+			'abilities'     => $abilities,
 		];
+	}
+
+	/**
+	 * A compact, transport-agnostic digest of this site's agent-surface posture.
+	 *
+	 * This is the stable contract that fleet consumers read — a MainWP child
+	 * reporter, a CI gate, or anything that needs "how bad is this one site?"
+	 * without the full per-ability report. It is a pure projection of the
+	 * already-computed $summary: no new analysis, no I/O, no state. Keeping it
+	 * small is deliberate — a fleet payload should carry counts and a grade, not
+	 * ability descriptors (which would enlarge what leaves the site and duplicate
+	 * the full report).
+	 *
+	 * `sev` speaks the Fleet Health Monitor vocabulary (`ok|warn|crit`) so an
+	 * `fhm_extra_signals` consumer can hand it straight to the grade. Note this
+	 * grade reflects the *highest finding severity present*, which is a smell
+	 * signal, not a safety proof — consistent with §5 (a green tile is "no issues
+	 * detected", never "safe").
+	 *
+	 * @param array<string, mixed> $summary The computed report summary.
+	 * @return array<string, mixed> The fleet digest.
+	 */
+	private function fleet_summary( array $summary ) {
+		$by_severity = isset( $summary['findings_by_severity'] ) && is_array( $summary['findings_by_severity'] )
+			? $summary['findings_by_severity']
+			: [];
+
+		// Highest severity that actually has ≥1 finding (most severe first).
+		$highest = null;
+		foreach ( Finding::SEVERITY_ORDER as $severity ) {
+			if ( ! empty( $by_severity[ $severity ] ) ) {
+				$highest = $severity;
+				break;
+			}
+		}
+
+		$by_severity_ints = [];
+		foreach ( $by_severity as $severity => $count ) {
+			$by_severity_ints[ (string) $severity ] = $this->int_of( $count );
+		}
+
+		return [
+			'sev'                   => $this->derive_sev( $highest ),
+			'highest_severity'      => $highest, // null when no findings at all.
+			'agent_reachable'       => $this->int_of( isset( $summary['agent_reachable'] ) ? $summary['agent_reachable'] : 0 ),
+			'agent_reachable_write' => $this->int_of( isset( $summary['agent_reachable_write'] ) ? $summary['agent_reachable_write'] : 0 ),
+			'findings_by_severity'  => $by_severity_ints,
+			'analysis_errors'       => $this->int_of( isset( $summary['analysis_errors'] ) ? $summary['analysis_errors'] : 0 ),
+		];
+	}
+
+	/**
+	 * Narrow a mixed value to a non-negative int for the digest.
+	 *
+	 * The summary is typed `array<string,mixed>`, so its counts are `mixed` at
+	 * the type level; this proves the int for both the reader and the analyzer.
+	 *
+	 * @param mixed $value Any value; only numerics contribute a count.
+	 * @return int The value as an int, or 0 when not numeric.
+	 */
+	private function int_of( $value ) {
+		return is_numeric( $value ) ? (int) $value : 0;
+	}
+
+	/**
+	 * Map the highest finding severity to the Fleet Health `ok|warn|crit` grade.
+	 *
+	 * Critical/high map to crit (an agent-reachable write or missing gate is a
+	 * fleet alarm); medium/low map to warn (a smell worth surfacing, not an
+	 * alarm); info or no findings map to ok. Deliberately conservative: info-only
+	 * sites (e.g. a bare ASA011 meta-tool awareness note) do not raise a grade.
+	 *
+	 * @param string|null $highest Highest present severity, or null.
+	 * @return string One of 'ok'|'warn'|'crit'.
+	 */
+	private function derive_sev( $highest ) {
+		switch ( $highest ) {
+			case Finding::SEVERITY_CRITICAL:
+			case Finding::SEVERITY_HIGH:
+				return 'crit';
+			case Finding::SEVERITY_MEDIUM:
+			case Finding::SEVERITY_LOW:
+				return 'warn';
+			default:
+				return 'ok';
+		}
 	}
 
 	/**

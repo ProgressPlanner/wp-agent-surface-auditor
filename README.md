@@ -83,6 +83,31 @@ All routes require `manage_options` (filter: `asa_capability`):
 - `GET /wp-json/asa/v1/servers` — MCP server inventory + adapter state
 - `GET /wp-json/asa/v1/export` — report as a download attachment
 
+### Fleet summary
+
+The report carries a compact `fleet_summary` — a one-glance digest of this
+site's agent-surface posture, meant for fleet tooling that needs "how exposed is
+this one site?" without the full per-ability report:
+
+```json
+"fleet_summary": {
+  "sev": "crit",
+  "highest_severity": "critical",
+  "agent_reachable": 19,
+  "agent_reachable_write": 3,
+  "findings_by_severity": { "critical": 3, "high": 7, "medium": 9, "low": 6, "info": 1 },
+  "analysis_errors": 0
+}
+```
+
+`sev` (`ok`/`warn`/`crit`) is derived conservatively from the highest finding
+severity present (critical/high → `crit`, medium/low → `warn`, info or none →
+`ok`) and, like the rest of the report, means "no issues detected", never
+"safe". It is a pure projection of the audit — no extra analysis — and is
+consumed as a fleet-health signal (e.g. by a MainWP Fleet Health Monitor via its
+`fhm_extra_signals` filter). Treat the field as optional: a report cached before
+an upgrade may briefly omit it.
+
 ## WP-CLI & CI
 
 The plugin registers `wp asa audit` (read-only, like everything else):
